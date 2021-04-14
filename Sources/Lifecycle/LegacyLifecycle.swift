@@ -12,8 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#if compiler(>=5.5)
-import _Concurrency
+#if compiler(<5.5)
 #if os(macOS) || os(iOS) || os(watchOS) || os(tvOS)
 import Darwin
 #else
@@ -30,8 +29,8 @@ import Logging
 public protocol LifecycleTask {
     var label: String { get }
     var shutdownIfNotStarted: Bool { get }
-    func start() async throws
-    func shutdown() async throws
+    func start(_ callback: @escaping (Error?) -> Void)
+    func shutdown(_ callback: @escaping (Error?) -> Void)
 }
 
 extension LifecycleTask {
@@ -44,20 +43,16 @@ extension LifecycleTask {
 
 /// Supported startup and shutdown method styles
 public struct LifecycleHandler {
-    //private let underlying: ((@escaping (Error?) -> Void) -> Void)?
-    private let underlying: (() async throws -> Void)?
+    @available(*, deprecated)
+    public typealias Callback = (@escaping (Error?) -> Void) -> Void
+
+    private let underlying: ((@escaping (Error?) -> Void) -> Void)?
 
     /// Initialize a `LifecycleHandler` based on a completion handler.
     ///
     /// - parameters:
     ///    - handler: the underlying completion handler
-    @available(*, deprecated)
-    public init(_ handler: (@escaping (Error?) -> Void) -> Void) {
-        // FIXME
-        fatalError("not implemented")
-    }
-
-    public init(_ handler: (() async throws -> Void)?) {
+    public init(_ handler: ((@escaping (Error?) -> Void) -> Void)?) {
         self.underlying = handler
     }
 
@@ -65,12 +60,7 @@ public struct LifecycleHandler {
     ///
     /// - parameters:
     ///    - handler: the underlying async handler
-    @available(*, deprecated)
-    public static func `async`(_ handler: @escaping (@escaping (Error?) -> Void) -> Void) -> LifecycleHandler {
-        return LifecycleHandler(handler)
-    }
-
-    public static func `async`(_ handler: @escaping () async throws -> Void) -> LifecycleHandler {
+    public static func async(_ handler: @escaping (@escaping (Error?) -> Void) -> Void) -> LifecycleHandler {
         return LifecycleHandler(handler)
     }
 
@@ -79,10 +69,14 @@ public struct LifecycleHandler {
     /// - parameters:
     ///    - body: the underlying function
     public static func sync(_ body: @escaping () throws -> Void) -> LifecycleHandler {
-        func asyncBody () async throws {
-            try body()
+        return LifecycleHandler { completionHandler in
+            do {
+                try body()
+                completionHandler(nil)
+            } catch {
+                completionHandler(error)
+            }
         }
-        return LifecycleHandler(asyncBody)
     }
 
     /// Noop `LifecycleHandler`.
@@ -90,10 +84,11 @@ public struct LifecycleHandler {
         return LifecycleHandler(nil)
     }
 
-    internal func run() async throws {
-        if let underlying = self.underlying {
-            try await underlying()
+    internal func run(_ completionHandler: @escaping (Error?) -> Void) {
+        let body = self.underlying ?? { callback in
+            callback(nil)
         }
+        body(completionHandler)
     }
 
     internal var noop: Bool {
@@ -105,20 +100,13 @@ public struct LifecycleHandler {
 
 /// LifecycleHandler for starting stateful tasks. The state can then be fed into a LifecycleShutdownHandler
 public struct LifecycleStartHandler<State> {
-    //private let underlying: (@escaping (Result<State, Error>) -> Void) -> Void
-    private let underlying: () async throws -> State
+    private let underlying: (@escaping (Result<State, Error>) -> Void) -> Void
 
     /// Initialize a `LifecycleHandler` based on a completion handler.
     ///
     /// - parameters:
     ///    - callback: the underlying completion handler
-    @available(*, deprecated)
     public init(_ handler: @escaping (@escaping (Result<State, Error>) -> Void) -> Void) {
-        // FIXME
-        fatalError("not implemented")
-    }
-
-    public init(_ handler: @escaping () async throws -> State) {
         self.underlying = handler
     }
 
@@ -126,12 +114,7 @@ public struct LifecycleStartHandler<State> {
     ///
     /// - parameters:
     ///    - handler: the underlying async handler
-    @available(*, deprecated)
-    public static func `async`(_ handler: @escaping (@escaping (Result<State, Error>) -> Void) -> Void) -> LifecycleStartHandler {
-        return LifecycleStartHandler(handler)
-    }
-
-    public static func `async`(_ handler: @escaping () async throws -> State) -> LifecycleStartHandler {
+    public static func async(_ handler: @escaping (@escaping (Result<State, Error>) -> Void) -> Void) -> LifecycleStartHandler {
         return LifecycleStartHandler(handler)
     }
 
@@ -140,33 +123,30 @@ public struct LifecycleStartHandler<State> {
     /// - parameters:
     ///    - body: the underlying function
     public static func sync(_ body: @escaping () throws -> State) -> LifecycleStartHandler {
-        func asyncBody () async throws -> State {
-            try body()
+        return LifecycleStartHandler { completionHandler in
+            do {
+                let state = try body()
+                completionHandler(.success(state))
+            } catch {
+                completionHandler(.failure(error))
+            }
         }
-        return LifecycleStartHandler(asyncBody)
     }
 
-    internal func run() async throws -> State {
-        try await self.underlying()
+    internal func run(_ completionHandler: @escaping (Result<State, Error>) -> Void) {
+        self.underlying(completionHandler)
     }
 }
 
 /// LifecycleHandler for shutting down stateful tasks. The state comes from a LifecycleStartHandler
 public struct LifecycleShutdownHandler<State> {
-    //private let underlying: (State, @escaping (Error?) -> Void) -> Void
-    private let underlying: (State) async throws -> Void
+    private let underlying: (State, @escaping (Error?) -> Void) -> Void
 
     /// Initialize a `LifecycleShutdownHandler` based on a completion handler.
     ///
     /// - parameters:
     ///    - handler: the underlying completion handler
-    @available(*, deprecated)
     public init(_ handler: @escaping (State, @escaping (Error?) -> Void) -> Void) {
-        // FIXME
-        fatalError("not implemented")
-    }
-
-    public init(_ handler: @escaping (State) async throws -> Void) {
         self.underlying = handler
     }
 
@@ -174,12 +154,7 @@ public struct LifecycleShutdownHandler<State> {
     ///
     /// - parameters:
     ///    - handler: the underlying async handler
-    @available(*, deprecated)
-    public static func `async`(_ handler: @escaping (State, @escaping (Error?) -> Void) -> Void) -> LifecycleShutdownHandler {
-       return LifecycleShutdownHandler(handler)
-    }
-
-    public static func `async`(_ handler: @escaping (State) async throws -> Void) -> LifecycleShutdownHandler {
+    public static func async(_ handler: @escaping (State, @escaping (Error?) -> Void) -> Void) -> LifecycleShutdownHandler {
         return LifecycleShutdownHandler(handler)
     }
 
@@ -188,14 +163,18 @@ public struct LifecycleShutdownHandler<State> {
     /// - parameters:
     ///    - body: the underlying function
     public static func sync(_ body: @escaping (State) throws -> Void) -> LifecycleShutdownHandler {
-        func asyncBody (state: State) async throws -> Void {
-            try body(state)
+        return LifecycleShutdownHandler { state, completionHandler in
+            do {
+                try body(state)
+                completionHandler(nil)
+            } catch {
+                completionHandler(error)
+            }
         }
-        return LifecycleShutdownHandler(asyncBody)
     }
 
-    internal func run(state: State) async throws -> Void {
-        try await self.underlying(state)
+    internal func run(state: State, _ completionHandler: @escaping (Error?) -> Void) {
+        self.underlying(state, completionHandler)
     }
 }
 
@@ -227,32 +206,22 @@ public struct ServiceLifecycle {
     ///
     /// - parameters:
     ///    - callback: The handler which is called after the start operation completes. The parameter will be `nil` on success and contain the `Error` otherwise.
-    @available(*, deprecated)
     public func start(_ callback: @escaping (Error?) -> Void) {
-        // FIXE
-    }
-
-    public func start() async throws {
         guard self.underlying.idle else {
             preconditionFailure("already started")
         }
         self.setupShutdownHook()
-        try await self.underlying.start()
+        self.underlying.start(on: self.configuration.callbackQueue, callback)
     }
 
     /// Starts the provided `LifecycleTask` array and waits (blocking) until a shutdown `Signal` is captured or `shutdown` is called on another thread.
     /// Startup is performed in the order of items provided.
-    @available(*, deprecated)
-    public func _startAndWait() throws {
-        // FIXE
-    }
-
-    public func startAndWait() async throws {
+    public func startAndWait() throws {
         guard self.underlying.idle else {
             preconditionFailure("already started")
         }
         self.setupShutdownHook()
-        try await self.underlying.startAndWait()
+        try self.underlying.startAndWait(on: self.configuration.callbackQueue)
     }
 
     /// Shuts down the `LifecycleTask` array provided in `start` or `startAndWait`.
@@ -260,23 +229,13 @@ public struct ServiceLifecycle {
     ///
     /// - parameters:
     ///    - callback: The handler which is called after the start operation completes. The parameter will be `nil` on success and contain the `Error` otherwise.
-    @available(*, deprecated)
     public func shutdown(_ callback: @escaping (Error?) -> Void = { _ in }) {
         self.underlying.shutdown(callback)
     }
 
-    public func shutdown() async throws {
-        try await self.underlying.shutdown()
-    }
-
     /// Waits (blocking) until shutdown `Signal` is captured or `shutdown` is invoked on another thread.
-    @available(*, deprecated)
-    public func _wait() {
-        self.underlying._wait()
-    }
-
-    public func wait() async throws {
-        try await self.underlying.wait()
+    public func wait() {
+        self.underlying.wait()
     }
 
     private func installBacktrace() {
@@ -288,16 +247,14 @@ public struct ServiceLifecycle {
 
     private func setupShutdownHook() {
         self.configuration.shutdownSignal?.forEach { signal in
-            // FIXME
             self.log("setting up shutdown hook on \(signal)")
-            fatalError("not implemented")
-            //let signalSource = ServiceLifecycle.trap(signal: signal, handler: { signal in
-            //    self.log("intercepted signal: \(signal)")
-            //    self.shutdown()
-            //}, cancelAfterTrap: true)
-            //self.underlying.shutdownGroup.notify(queue: .global()) {
-            //    signalSource.cancel()
-            //}
+            let signalSource = ServiceLifecycle.trap(signal: signal, handler: { signal in
+                self.log("intercepted signal: \(signal)")
+                self.shutdown()
+            }, cancelAfterTrap: true)
+            self.underlying.shutdownGroup.notify(queue: .global()) {
+                signalSource.cancel()
+            }
         }
     }
 
@@ -402,9 +359,7 @@ struct ShutdownError: Error {
 public class ComponentLifecycle: LifecycleTask {
     public let label: String
     private let logger: Logger
-
-    private var waitlist = [UnsafeContinuation<Void, Error>]()
-    private let waitlistLock = Lock()
+    internal let shutdownGroup = DispatchGroup()
 
     private var state = State.idle([])
     private let stateLock = Lock()
@@ -417,7 +372,7 @@ public class ComponentLifecycle: LifecycleTask {
     public init(label: String, logger: Logger? = nil) {
         self.label = label
         self.logger = logger ?? Logger(label: label)
-        //self.shutdownGroup.enter()
+        self.shutdownGroup.enter()
     }
 
     /// Starts the provided `LifecycleTask` array.
@@ -425,10 +380,8 @@ public class ComponentLifecycle: LifecycleTask {
     ///
     /// - parameters:
     ///    - callback: The handler which is called after the start operation completes. The parameter will be `nil` on success and contain the `Error` otherwise.
-    @available(*, deprecated)
     public func start(_ callback: @escaping (Error?) -> Void) {
-        // FIXME
-        fatalError("not implemented")
+        self.start(on: .global(), callback)
     }
 
     /// Starts the provided `LifecycleTask` array.
@@ -437,64 +390,11 @@ public class ComponentLifecycle: LifecycleTask {
     /// - parameters:
     ///    - on: `DispatchQueue` to run the handlers callback  on
     ///    - callback: The handler which is called after the start operation completes. The parameter will be `nil` on success and contain the `Error` otherwise.
-    @available(*, deprecated)
     public func start(on queue: DispatchQueue, _ callback: @escaping (Error?) -> Void) {
-        // FIXME
-        fatalError("not implemented")
-    }
-
-    public func start() async throws {
-        /*var shutdownContinuation: UnsafeContinuation<Void, Error>
-        try await withUnsafeThrowingContinuation{ cc in
-            shutdownContinuation = cc
-        }*/
-
-        let tasks = self.stateLock.withLock { () -> [LifecycleTask] in
-            guard case .idle(let tasks) = self.state else {
-                preconditionFailure("invalid state, \(self.state)")
-            }
-            self.state = .starting(tasks, 0)
-            return tasks
-        }
-
-        self.log("starting")
-        Counter(label: "\(self.label).lifecycle.start").increment()
-
-        if tasks.count == 0 {
-            self.log(level: .notice, "no tasks provided")
-        }
-
-        do {
-            try await self.startTask(tasks: tasks, index: 0)
-        } catch {
-            try await self.shutdown()
-        }
-
-        self.stateLock.lock()
-        switch self.state {
-        case .shuttingDown:
-            self.stateLock.unlock()
-            // shutdown was called while starting, or start failed, shutdown what we can
-            //let stoppable: [LifecycleTask]
-            //if started < tasks.count {
-            //    stoppable = tasks.enumerated().filter { $0.offset <= started || $0.element.shutdownIfNotStarted }.map { $0.element }
-            //} else {
-            //    stoppable = tasks
-            //}
-            //await self._shutdown(tasks: stoppable)
-            // TODO: verify this works, used to be that the group was left after callback go the error
-            //self.shutdownGroup.leave()
-            //if let error = error {
-            //    throw error
-            //}
-        case .shutdown:
-            self.stateLock.unlock()
-        case .starting:
-            self.state = .started(tasks)
-            self.stateLock.unlock()
-        default:
+        guard case .idle(let tasks) = (self.stateLock.withLock { self.state }) else {
             preconditionFailure("invalid state, \(self.state)")
         }
+        self._start(on: queue, tasks: tasks, callback: callback)
     }
 
     /// Starts the provided `LifecycleTask` array and waits (blocking) until `shutdown` is called on another thread.
@@ -502,80 +402,59 @@ public class ComponentLifecycle: LifecycleTask {
     ///
     /// - parameters:
     ///    - on: `DispatchQueue` to run the handlers callback on
-    @available(*, deprecated)
     public func startAndWait(on queue: DispatchQueue = .global()) throws {
-        // FIXME
-        fatalError("not implemented")
-    }
+        var startError: Error?
+        let startSemaphore = DispatchSemaphore(value: 0)
 
-    public func startAndWait() async throws {
-        try await self.start()
-        try await self.wait()
+        self.start(on: queue) { error in
+            startError = error
+            startSemaphore.signal()
+        }
+        startSemaphore.wait()
+        try startError.map { throw $0 }
+        self.wait()
     }
 
     /// Shuts down the `LifecycleTask` array provided in `start` or `startAndWait`.
     /// Shutdown is performed in reverse order of items provided.
-    @available(*, deprecated)
     public func shutdown(_ callback: @escaping (Error?) -> Void = { _ in }) {
-        // FIXME
-        fatalError("not implemented")
-    }
+        let setupShutdownListener = { (queue: DispatchQueue) in
+            self.shutdownGroup.notify(queue: queue) {
+                guard case .shutdown(let errors) = self.state else {
+                    preconditionFailure("invalid state, \(self.state)")
+                }
+                callback(errors.flatMap(Lifecycle.ShutdownError.init))
+            }
+        }
 
-    public func shutdown() async throws {
         self.stateLock.lock()
         switch self.state {
         case .idle:
             self.state = .shutdown(nil)
             self.stateLock.unlock()
-        case .starting(let tasks, let started):
-            let stoppable: [LifecycleTask]
-            if started < tasks.count {
-                stoppable = tasks.enumerated().filter { $0.offset <= started || $0.element.shutdownIfNotStarted }.map { $0.element }
-            } else {
-                stoppable = tasks
-            }
-            let handle: Task.Handle<Void, Error> = Task.runDetached {
-                try await self._shutdown(tasks: stoppable)
-            }
-            self.state = .shuttingDown(handle)
-            self.stateLock.unlock()
-            try await handle.get()
-        case .started(let tasks):
-            let handle: Task.Handle<Void, Error> = Task.runDetached {
-                try await self._shutdown(tasks: tasks)
-            }
-            self.state = .shuttingDown(handle)
-            self.stateLock.unlock()
-            try await handle.get()
-        case .shuttingDown(let handle):
-            self.stateLock.unlock()
-            try await handle.get()
+            defer { self.shutdownGroup.leave() }
+            callback(nil)
         case .shutdown:
             self.stateLock.unlock()
             self.log(level: .warning, "already shutdown")
+            callback(nil)
+        case .starting(let queue):
+            self.state = .shuttingDown(queue)
+            self.stateLock.unlock()
+            setupShutdownListener(queue)
+        case .shuttingDown(let queue):
+            self.stateLock.unlock()
+            setupShutdownListener(queue)
+        case .started(let queue, let tasks):
+            self.stateLock.unlock()
+            setupShutdownListener(queue)
+            self._shutdown(on: queue, tasks: tasks, callback: self.shutdownGroup.leave)
         }
-
-        guard case .shutdown(let errors) = self.state else {
-            preconditionFailure("invalid state, \(self.state)")
-        }
-        let result: Result<Void, Error> = errors.flatMap{ .failure(Lifecycle.ShutdownError(errors: $0)) } ?? .success(())
-        let waitlist = self.waitlistLock.withLock{ self.waitlist }
-        waitlist.forEach { $0.resume(with: result) }
     }
 
     /// Waits (blocking) until `shutdown` is invoked on another thread.
-    @available(*, deprecated)
-    public func _wait() {
-        // FIXME
-        fatalError("not implemented")
-    }
-
-    public func wait() async throws {
-        try await withUnsafeThrowingContinuation{ continuation in
-            self.waitlistLock.withLock{
-                self.waitlist.append(continuation)
-            }
-        }
+    public func wait() {
+        self.shutdownGroup.wait()
     }
 
     // MARK: - internal
@@ -590,78 +469,116 @@ public class ComponentLifecycle: LifecycleTask {
 
     // MARK: - private
 
-    private func startTask(tasks: [LifecycleTask], index: Int) async throws {
-        // FIXME
-        // async barrier
-        //let start = { (callback) -> Void in queue.async { tasks[index].start(callback) } }
-        //let callback = { (index, error) -> Void in queue.async { callback(index, error) } }
-
-        if index >= tasks.count {
-            return
+    private func _start(on queue: DispatchQueue, tasks: [LifecycleTask], callback: @escaping (Error?) -> Void) {
+        self.stateLock.withLock {
+            guard case .idle = self.state else {
+                preconditionFailure("invalid state, \(self.state)")
+            }
+            self.state = .starting(queue)
         }
 
-        self.log("starting tasks [\(tasks[index].label)]")
-        let startTime = DispatchTime.now()
+        self.log("starting")
+        Counter(label: "\(self.label).lifecycle.start").increment()
 
-        do  {
-            try await tasks[index].start()
-            Timer(label: "\(self.label).\(tasks[index].label).lifecycle.start").recordNanoseconds(DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds)
-            // shutdown called while starting
-            guard case .starting = (self.stateLock.withLock{ self.state }) else {
-                return
+        if tasks.count == 0 {
+            self.log(level: .notice, "no tasks provided")
+        }
+        self.startTask(on: queue, tasks: tasks, index: 0) { started, error in
+            self.stateLock.lock()
+            if error != nil {
+                self.state = .shuttingDown(queue)
             }
-            self.stateLock.withLock {
-                self.state = .starting(tasks, index)
+            switch self.state {
+            case .shuttingDown:
+                self.stateLock.unlock()
+                // shutdown was called while starting, or start failed, shutdown what we can
+                let stoppable: [LifecycleTask]
+                if started < tasks.count {
+                    stoppable = tasks.enumerated().filter { $0.offset <= started || $0.element.shutdownIfNotStarted }.map { $0.element }
+                } else {
+                    stoppable = tasks
+                }
+                self._shutdown(on: queue, tasks: stoppable) {
+                    callback(error)
+                    self.shutdownGroup.leave()
+                }
+            case .starting:
+                self.state = .started(queue, tasks)
+                self.stateLock.unlock()
+                callback(nil)
+            default:
+                preconditionFailure("invalid state, \(self.state)")
             }
-            return try await self.startTask(tasks: tasks, index: index + 1)
-        } catch {
-            self.log(level: .error, "failed to start [\(tasks[index].label)]: \(error)")
-            throw error
         }
     }
 
-    private func _shutdown(tasks: [LifecycleTask]) async throws {
+    private func startTask(on queue: DispatchQueue, tasks: [LifecycleTask], index: Int, callback: @escaping (Int, Error?) -> Void) {
+        // async barrier
+        let start = { (callback) -> Void in queue.async { tasks[index].start(callback) } }
+        let callback = { (index, error) -> Void in queue.async { callback(index, error) } }
+
+        if index >= tasks.count {
+            return callback(index, nil)
+        }
+        self.log("starting tasks [\(tasks[index].label)]")
+        let startTime = DispatchTime.now()
+        start { error in
+            Timer(label: "\(self.label).\(tasks[index].label).lifecycle.start").recordNanoseconds(DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds)
+            if let error = error {
+                self.log(level: .error, "failed to start [\(tasks[index].label)]: \(error)")
+                return callback(index, error)
+            }
+            // shutdown called while starting
+            if case .shuttingDown = self.stateLock.withLock({ self.state }) {
+                return callback(index, nil)
+            }
+            self.startTask(on: queue, tasks: tasks, index: index + 1, callback: callback)
+        }
+    }
+
+    private func _shutdown(on queue: DispatchQueue, tasks: [LifecycleTask], callback: @escaping () -> Void) {
+        self.stateLock.withLock {
+            self.state = .shuttingDown(queue)
+        }
+
         self.log("shutting down")
         Counter(label: "\(self.label).lifecycle.shutdown").increment()
 
-        let errors = await self.shutdownTask(tasks: tasks.reversed(), index: 0, errors: nil)
-        try self.stateLock.withLock {
-            guard case .shuttingDown = self.state else {
-                preconditionFailure("invalid state, \(self.state)")
+        self.shutdownTask(on: queue, tasks: tasks.reversed(), index: 0, errors: nil) { errors in
+            self.stateLock.withLock {
+                guard case .shuttingDown = self.state else {
+                    preconditionFailure("invalid state, \(self.state)")
+                }
+                self.state = .shutdown(errors)
             }
-            self.state = .shutdown(errors)
-            try errors.flatMap{ throw Lifecycle.ShutdownError(errors: $0) }
-
+            self.log("bye")
+            callback()
         }
-        self.log("bye")
     }
 
-    private func shutdownTask(tasks: [LifecycleTask], index: Int, errors: [String: Error]?) async -> [String: Error]? {
-        // FIXME
+    private func shutdownTask(on queue: DispatchQueue, tasks: [LifecycleTask], index: Int, errors: [String: Error]?, callback: @escaping ([String: Error]?) -> Void) {
         // async barrier
-        //let shutdown = { (callback) -> Void in queue.async { tasks[index].shutdown(callback) } }
-        //let callback = { (errors) -> Void in queue.async { callback(errors) } }
+        let shutdown = { (callback) -> Void in queue.async { tasks[index].shutdown(callback) } }
+        let callback = { (errors) -> Void in queue.async { callback(errors) } }
 
         if index >= tasks.count {
-            return errors
+            return callback(errors)
         }
 
         self.log("stopping tasks [\(tasks[index].label)]")
         let startTime = DispatchTime.now()
-
-        do {
-            try await tasks[index].shutdown()
+        shutdown { error in
             Timer(label: "\(self.label).\(tasks[index].label).lifecycle.shutdown").recordNanoseconds(DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds)
-        } catch {
-            self.log(level: .error, "failed to stop [\(tasks[index].label)]: \(error)")
             var errors = errors
-            if errors == nil {
-                errors = [:]
+            if let error = error {
+                if errors == nil {
+                    errors = [:]
+                }
+                errors![tasks[index].label] = error
+                self.log(level: .error, "failed to stop [\(tasks[index].label)]: \(error)")
             }
-            errors![tasks[index].label] = error
+            self.shutdownTask(on: queue, tasks: tasks, index: index + 1, errors: errors, callback: callback)
         }
-        // continue to next shutdown task regardless of previous shutdown result
-        return await self.shutdownTask(tasks: tasks, index: index + 1, errors: errors)
     }
 
     internal func log(level: Logger.Level = .info, _ message: String) {
@@ -670,9 +587,9 @@ public class ComponentLifecycle: LifecycleTask {
 
     private enum State {
         case idle([LifecycleTask])
-        case starting([LifecycleTask], Int)
-        case started([LifecycleTask])
-        case shuttingDown(Task.Handle<Void, Error>)
+        case starting(DispatchQueue)
+        case started(DispatchQueue, [LifecycleTask])
+        case shuttingDown(DispatchQueue)
         case shutdown([String: Error]?)
     }
 }
@@ -740,22 +657,22 @@ extension LifecycleTasksContainer {
 internal struct _LifecycleTask: LifecycleTask {
     let label: String
     let shutdownIfNotStarted: Bool
-    let startHandler: LifecycleHandler
-    let shutdownHandler: LifecycleHandler
+    let start: LifecycleHandler
+    let shutdown: LifecycleHandler
 
     init(label: String, shutdownIfNotStarted: Bool? = nil, start: LifecycleHandler, shutdown: LifecycleHandler) {
         self.label = label
         self.shutdownIfNotStarted = shutdownIfNotStarted ?? start.noop
-        self.startHandler = start
-        self.shutdownHandler = shutdown
+        self.start = start
+        self.shutdown = shutdown
     }
 
-    func start() async throws {
-        try await self.startHandler.run()
+    func start(_ callback: @escaping (Error?) -> Void) {
+        self.start.run(callback)
     }
 
-    func shutdown() async throws  {
-        try await self.shutdownHandler.run()
+    func shutdown(_ callback: @escaping (Error?) -> Void) {
+        self.shutdown.run(callback)
     }
 }
 
@@ -763,30 +680,37 @@ internal struct _LifecycleTask: LifecycleTask {
 internal class StatefulLifecycleTask<State>: LifecycleTask {
     let label: String
     let shutdownIfNotStarted: Bool = false
-    let startHandler: LifecycleStartHandler<State>
-    let shutdownHandler: LifecycleShutdownHandler<State>
+    let start: LifecycleStartHandler<State>
+    let shutdown: LifecycleShutdownHandler<State>
 
     let stateLock = Lock()
     var state: State?
 
     init(label: String, start: LifecycleStartHandler<State>, shutdown: LifecycleShutdownHandler<State>) {
         self.label = label
-        self.startHandler = start
-        self.shutdownHandler = shutdown
+        self.start = start
+        self.shutdown = shutdown
     }
 
-    func start() async throws {
-        let state = try await self.startHandler.run()
-        self.stateLock.withLock {
-            self.state = state
+    func start(_ callback: @escaping (Error?) -> Void) {
+        self.start.run { result in
+            switch result {
+            case .failure(let error):
+                callback(error)
+            case .success(let state):
+                self.stateLock.withLock {
+                    self.state = state
+                }
+                callback(nil)
+            }
         }
     }
 
-    func shutdown() async throws {
+    func shutdown(_ callback: @escaping (Error?) -> Void) {
         guard let state = (self.stateLock.withLock { self.state }) else {
-            throw UnknownState()
+            return callback(UnknownState())
         }
-        try await self.shutdownHandler.run(state: state)
+        self.shutdown.run(state: state, callback)
     }
 
     struct UnknownState: Error {}

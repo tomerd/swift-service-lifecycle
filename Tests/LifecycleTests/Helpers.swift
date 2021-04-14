@@ -39,14 +39,14 @@ class GoodItem: LifecycleTask {
         return self.id
     }
 
-    func start(_ callback: @escaping (Error?) -> Void) {
+    func start() async throws {
         self.queue.asyncAfter(deadline: .now() + self.startDelay) {
             self.stateLock.withLock { self.state = .started }
             callback(nil)
         }
     }
 
-    func shutdown(_ callback: @escaping (Error?) -> Void) {
+    func shutdown() async throws {
         self.queue.asyncAfter(deadline: .now() + self.shutdownDelay) {
             self.stateLock.withLock { self.state = .shutdown }
             callback(nil)

@@ -23,6 +23,7 @@ final class ComponentLifecycleTests: XCTestCase {
         let items = (5 ... Int.random(in: 10 ... 20)).map { _ in GoodItem() }
         let lifecycle = ComponentLifecycle(label: "test")
         lifecycle.register(items)
+        /*
         lifecycle.start { startError in
             XCTAssertNil(startError, "not expecting error")
             lifecycle.shutdown { shutdownErrors in
@@ -30,6 +31,26 @@ final class ComponentLifecycleTests: XCTestCase {
             }
         }
         lifecycle.wait()
+        */
+        try await lifecycle.start()
+        try await lifecycle.shutdown()
+        items.forEach { XCTAssertEqual($0.state, .shutdown, "expected item to be shutdown, but \($0.state)") }
+    }
+
+    func testStartTDelayedShutdown() {
+        let items = (5 ... Int.random(in: 10 ... 20)).map { _ in GoodItem() }
+        let lifecycle = ComponentLifecycle(label: "test")
+        lifecycle.register(items)
+        try await lifecycle.start()
+        DispatchQueue.global().async {
+            do {
+                sleep(100)
+                try await lifecycle.shutdown()
+            } catch {
+                XCTFail("not expecting error")
+            }
+        }
+        try await lifecycle.wait()
         items.forEach { XCTAssertEqual($0.state, .shutdown, "expected item to be shutdown, but \($0.state)") }
     }
 
